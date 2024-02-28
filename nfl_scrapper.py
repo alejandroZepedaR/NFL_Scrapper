@@ -4,140 +4,153 @@ import requests
 from bs4 import BeautifulSoup
 import csv
 import os
+from tabulate import tabulate
+from qb import QuarterBack
+from qb import YearStats
+from qb import QuarterbackList
 
-def get_qb_stats(all_players):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "Accept-Encoding":"gzip, deflate", "Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "DNT":"1","Connection":"close", "Upgrade-Insecure-Requests":"1"}
-    
+def print_loading_bar(progress, total):
+    bar_length = 20
+    progress_ratio = progress / total
+    num_bar = int(progress_ratio * bar_length)
+    bar = '[' + '#' * num_bar + ' ' * (bar_length - num_bar) + ']'
+    return bar
+
+def get_qb_stats(qb_list):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "DNT": "1",
+        "Connection": "close",
+        "Upgrade-Insecure-Requests": "1"
+    }
+
     for i in range(1970, 2024):
+        loading_bar = print_loading_bar(i - 1970, 2024 - 1970)
+        print("Loading stats.. {} {}/2024".format(loading_bar, i))
         url = 'https://www.nfl.com/stats/player-stats/category/passing/{}/post/all/passingyards/desc'.format(i)
         page = requests.get(url, headers=headers)
-        Soup = BeautifulSoup(page.content, "html.parser")
+        soup = BeautifulSoup(page.content, "html.parser")
 
-        players = Soup.find_all(class_="d3-o-player-fullname nfl-o-cta--link")
-        passing_yards = Soup.find_all(class_="selected")
+        players = soup.find_all(class_="d3-o-player-fullname nfl-o-cta--link")
+        passing_yards = soup.find_all(class_="selected")
 
         index = 0
         for player in players:
-            if player.text.strip() not in all_players:
-                all_players[player.text.strip()] = {}
+            if not any(qb.get_name() == player.text.strip() for qb in qb_list.get_list()):
+                new_qb = QuarterBack(player.text.strip())
+                qb_list.add_qb(new_qb)
 
-            all_players[player.text.strip()][i] = {}
-            all_players[player.text.strip()][i]['year'] = len(all_players[player.text.strip()]) 
-            all_players[player.text.strip()][i]['passing_yards'] = int(passing_yards[index].text.strip())
+            qb = next(qb for qb in qb_list.get_list() if qb.get_name() == player.text.strip())
+            
+            # Find all rows in the table
+            rows = player.find_parent('tbody').find_all('tr')
+            
+            # Get the 7th row (0-based indexing)
+            row = rows[index]  # Adjust index if needed
+            
+            # Extract touchdowns
+            touchdowns = int(row.find_all('td')[6].text.strip())  # Adjust index if needed
+
+            #Extract Interceptions
+            interceptions = int(row.find_all('td')[7].text.strip())
+
+            new_year = YearStats(i, int(passing_yards[index].text.strip()), touchdowns, interceptions, 0)
+            qb.add_year(new_year)
 
             index += 1
+        
+        os.system('cls' if os.name == 'nt' else 'clear')
 
-    return all_players
+    return qb_list
 
-def read_csv(file_name):
-    all_players = {}
-    with open(file_name, mode='r') as file:
-            csv_reader = csv.reader(file)
-            for row in csv_reader:
-                if row[0] not in all_players:
-                    all_players[row[0]] = {}
-                all_players[row[0]][row[1]] = {}
-                all_players[row[0]][row[1]]['year'] = int(row[2])
-                all_players[row[0]][row[1]]['passing_yards'] = int(row[3])
-    return all_players
+def write_csv(file_name, qb_set):
+    qb_list = qb_set.get_list()
 
-def write_csv(file_name, all_players):
-    with open(file_name, mode='w', newline='') as file:
-            csv_writer = csv.writer(file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-            for player in all_players:
-                for year in all_players[player]:
-                    csv_writer.writerow([player, year, all_players[player][year]['year'], all_players[player][year]['passing_yards']])
-    print('File created!')
+    with open(file_name, 'w', newline='') as file:
+        writer = csv.writer(file)
+        for qb in qb_list:
+            for year, y_object in qb.get_years().items():
+                row = [qb.get_name(), year, y_object.get_passing_yards(), y_object.get_touchdowns(), y_object.get_interceptions(), y_object.get_completed_pass()]
+                writer.writerow(row)
 
-def get_stats_by_year(all_players, target_year):
-    player_stats = []
-    for player in all_players:
-        if target_year in all_players[player]:
-            player_stats.append((player, all_players[player][target_year]['passing_yards']))
-    print("Stats for {}:".format(target_year))
-    sorted(player_stats, key=lambda x: x[1])
-    for i in range(len(player_stats)):
-        print("{}. {} - {} passing yards".format(i+1, player_stats[i][0], player_stats[i][1]))
-    input('Press enter to continue...')
+    print("File created!")
 
-def get_stats_by_player(all_players, player):
-    player_stats = []
-    for year in all_players[player]:
-        player_stats.append((year, all_players[player][year]['passing_yards']))
-    print("Stats for {}:".format(player))
-    sorted(player_stats, key=lambda x: x[0])
-    for i in range(len(player_stats)):
-        print("{}. {} - {} passing yards".format(i+1, player_stats[i][0], player_stats[i][1]))
-    input('Press enter to continue...')
-    average_yards = get_average_yards(player_stats)
-    print("Average passing yards for {} is {} yearly".format(player, average_yards))
-    input('Press enter to continue...')
+def read_csv(file_name, qb_list):
+    with open(file_name, 'r') as file:
+        reader = csv.reader(file)
+        for row in reader:
+            if not any(qb.get_name() == row[0] for qb in qb_list.get_list()):
+                new_qb = QuarterBack(row[0])
+                qb_list.add_qb(new_qb)
 
-def get_max_yards(all_players):
-    max_yards = 0
-    max_player = ''
-    year_played = 0
-    for player in all_players:
-        for year in all_players[player]:
-            if all_players[player][year]['passing_yards'] > max_yards:
-                max_yards = all_players[player][year]['passing_yards']
-                max_player = player
-                year_played = year
-    print("{} has the most passing yards with {} yards in {}".format(max_player, max_yards, year_played))
-    input('Press enter to continue...')
+            qb = next(qb for qb in qb_list.get_list() if qb.get_name() == row[0])
 
-def get_min_yards(all_players):
-    min_yards = 10000000
-    min_player = ''
-    year_played = 0
-    for player in all_players:
-        for year in all_players[player]:
-            if all_players[player][year]['passing_yards'] < min_yards:
-                min_yards = all_players[player][year]['passing_yards']
-                min_player = player
-                year_played = year
-    print("{} has the lowest passing yards with {} yards in {}".format(min_player, min_yards, year_played))
-    input('Press enter to continue...')
+            new_year = YearStats(int(row[1]), int(row[2]), int(row[3]), int(row[4]), int(row[5]))
+            qb.add_year(new_year)
+    
+    return qb_list
 
-def get_average_yards(player_stats):
-    total_yards = 0
-    for year in player_stats:
-        total_yards += year[1]
-    return total_yards / len(player_stats)
+def get_stats_by_qb(qb_list):
+    qb_name = input("Enter QB Name: ").lower()
+
+    print(qb_list.get_qb(qb_name))
+    input("Enter to continue...")
+
+def get_stats_by_year(qb_list):
+    year_input = input("Enter a year: ")
+    year_dict = {}
+
+    lst = qb_list.get_list()
+    for qb in lst:
+        years = qb.get_years()
+        for year in years.values():
+            if str(year.get_year()) == str(year_input):
+                year_dict[qb.get_name()] = year
+
+    print("Stats for {} :".format(year_input))
+    table_data = []
+    for qb, year in year_dict.items():
+        table_data.append([
+            qb,
+            year.get_passing_yards(),
+            year.get_touchdowns(),
+            year.get_interceptions(),
+            "{}%".format(year.get_completed_pass())
+        ])
+
+    headers = ["Quarterback", "Passing Yards", "Touchdowns", "Interceptions", "Completed Pass"]
+    print(tabulate(table_data, headers=headers, tablefmt="grid"))
+
+    input("Enter to continue...")
 
 
-                                                                      
 def main():
-    file_name = 'qb_stats.csv'
+    file_name = "all_qb_stats.csv"
+    qb_list = QuarterbackList()
 
     if os.path.exists(file_name):
-        all_players = read_csv(file_name)
+        qb_list = read_csv(file_name, qb_list)
     else:
-        all_players = get_qb_stats({})
-        write_csv(file_name, all_players)
+        qb_list = get_qb_stats( qb_list)
+        write_csv(file_name, qb_list)
 
     while True:
-        print("1. Get stats by year")
-        print("2. Get stats by player")
-        print("3. Get max yards")
-        print("4. Get min yards")
-        print("5. Exit")
-        option = int(input("Enter option: "))
-        if option == 1:
-            year = input("Enter year: ")
-            get_stats_by_year(all_players, year)
-        elif option == 2:
-            player = input("Enter player: ")
-            get_stats_by_player(all_players, player)
-        elif option == 3:
-            get_max_yards(all_players)
-        elif option == 4:
-            get_min_yards(all_players)
-        elif option == 5:
-            break
-        else:
-            print("Invalid option")
+        print("Select option to show results: ")
+        print("1. Get stats by QB")
+        print("2. Get stats by Year")
+        print("0. Exit")
+        prompt = input()
 
+        if prompt == '1':
+            os.system('cls' if os.name == 'nt' else 'clear')
+            get_stats_by_qb(qb_list)
+        elif prompt == '2':
+            os.system('cls' if os.name == 'nt' else 'clear')
+            get_stats_by_year(qb_list)
+        elif prompt == '0':
+            break
 
 
 main()
